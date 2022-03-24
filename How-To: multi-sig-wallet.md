@@ -1,3 +1,7 @@
+**DISCLAIMER**
+First project of many in solidity. So if it isn't perfect, that's okay
+
+
 How to code a Multi Signature Wallet in solidity
 
 First, let's begin by defining what exactly a multi sig wallet is. 
