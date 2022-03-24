@@ -1,0 +1,246 @@
+How to code a Multi Signature Wallet in solidity
+
+First, let's begin by defining what exactly a multi sig wallet is. 
+A multi sig wallet stands for multi signature wallet in which multiple addresses can verify, confirm or revoke a transaction made on a wallet that is shared by multiple owners. A majority of verifiers has to be achieved for a transaction to be confirmed and executed.
+
+Code
+
+1. Events 
+	- event Deposit()
+	- event SubmitTransaction()
+	- event ExecuteTransaction()
+	- event Approve()
+	- event RevokeConfirmation()
+
+```
+event Deposit(address indexed sender, uint amount, uint balance); 
+event Submit(uint indexed txId); 
+event Approve(address indexed owner, uint indexed txIndex);  
+event Revoke(address indexed owner, uint indexed txIndex);  
+event Execute(address indexed owner, uint indexed txIndex);
+```
+
+
+2. State Variables
+	- store some owners in an array of addresses called owners
+	- only owners should be allowed to execute functions in this contract
+		- We define a mapping of addresses that will return a boolean if isOwner
+	- Once a transaction is submited to the contract, other owners will have to approve that the transaction should go through. The number of approvals needed before the transaction can be accepted will be stored in a uint.
+
+	- We will declare a struct that will store the Transaction
+		- the address the transaction should go to
+		- the value that should be sent
+		- some data
+		- a boolean indicating whether the Transaction has been executed or not
+		- Number of confirmations this transaction has received
+	- We also store the struct of Transaction into an array of transactions
+	- Each transaction can be exececuted if the number of approvals is greater or equal to the required Confirmations. We will store the approval of each transaction by each owner  into a public nested mapping called approved. From uint(index of the transaction) to another mapping of address (address of the owner) to boolean (indicates whether the transaction is approved by the owner or not)
+
+```
+address[] public owners;      
+mapping(address => bool) public isOwner;  
+uint public required;  
+struct Transaction {  
+	address to;  
+	uint value;  
+	bytes data;  
+	bool executed;
+        uint numConfirmations;
+  
+}  
+Transaction[] public transactions;  
+mapping(uint => mapping(address => bool)) public approved;
+```
+
+
+3. Constructor
+	- For the input of the constructor we put in two inputs. The Addresses of the owners from memory and the required number of Confirmations for the contract.
+	-  Validate _owner is not empty
+	-  Validate _required is greater than 0
+	-  Validate _required is less than or equal to the number of _owners
+	-  Set the state variables owners from the input _owners.
+		- Each owner should not be the zero address
+		- Validate owners are unique using the isOwner mapping
+	-  Set the state variable required from the input.
+
+```
+constructor(address[] memory _owners, uint _required) {  
+	require(_owners.length > 0, "owners required");  
+	require(_required > 0 &&  _required <=_owners.length, "Invalid required number of confirmations"  
+	);  
+	for (uint i ; i < _owners.length ; i++) {  
+		address owner = _owners[i];  
+		require(owner != address(0), "invalid owner");  
+		require(!isOwner[owner], "owner not unique");  
+		isOwner[owner] = true;  
+		owners.push(owner);  
+	}  
+	required  = _required;  
+}
+```
+
+4. Declare a payable fallback function. It should emit the Deposit event (see below) with
+		- msg.sender
+		- msg.value
+		- current amount of ether in the contract (address(this).balance)
+
+```
+receive() external payable {  
+	emit Deposit(msg.sender, msg.value,(address(this).balance)); 
+}
+```
+
+5. Complete the submitTransaction function
+	- Create an onlyOwner modifier that checks that the message sender is included in isOwner.
+	- Inside submitTransaction, create a new Transaction struct from the inputs and append it to the transactions array
+		- executed should be initialized to false
+		- numConfirmations should be initialized to 0
+	- Emit the SubmitTransaction event 
+		- txIndex should be the index of the newly created transaction
+```
+modifier onlyOwner() { 
+    require(isOwner[msg.sender], "not an owner"); 
+    _; 
+} 
+function submit(address _to, uint _value, bytes calldata _data) 
+    external 
+    onlyOwner 
+{ 
+    transactions.push(Transaction({ 
+            to: _to, 
+            value: _value, 
+            data: _data, 
+            executed: false,
+            numConfirmations: 0
+     })); 
+    emit Submit(transactions.length - 1);  
+} 
+```
+6. Complete the Approve function
+	- Complete the modifier txExists
+		- it should require that the transaction at txIndex exists by checking _txIndex is bigger 
+	- Complete the modifier notExecuted
+		- it should require that the transaction at txIndex is not yet executed
+	- Complete the modifier notConfirmed
+		- it should require that the transaction at txIndex is not yet confirmed by msg.sender
+	- Confirm the transaction
+		- Check that the _txId of the msg.sender in the nested mapping approved is equal to true.
+		- We need to get the data stored in the Transaction struct as a variable transaction and update it.
+		- increment numConfirmation by 1
+		- emit ConfirmTransaction event for the transaction being confirmed
+```
+modifier txExists(uint _txId) { 
+    require(_txId < transactions.length, "Tx does not exist"); 
+    _; 
+} 
+modifier notApproved(uint _txId){ 
+    require(!approved[_txId][msg.sender], "tx already approved"); 
+    _; 
+} 
+modifier notExecuted(uint _txId){ 
+    require(!transactions[_txId].executed, "tx already executed"); 
+    _; 
+} 
+function approve(uint _txId) 
+    external 
+    onlyOwner 
+    txExists(_txId) 
+    notApproved(_txId)  
+    notExecuted(_txId)  
+    { 
+    
+    Transaction storage transaction = transactions[_txId];
+    approved[_txId][msg.sender] = true;
+    transaction.numConfirmations += 1;
+    emit Approve(msg.sender, _txId); 
+} 
+
+```
+
+7. Before an owner can execute a function we need to make sure that the number of approvals is high enough. So we should define a function that counts the number of approvals. This function can be private.
+	- For each owner, we check whether approved is true or not.
+		- if we initialise count within the return variable count, then we do not need to write return count; because it is implicitly returned  from returns.
+```
+function _getApprovalCount(uint _txId) private view returns(uint count){
+    for(uint i; i < owners.length; i++){
+        if(approved[_txId][owners[i]]) {
+            count += 1; 
+    }
+}
+```
+8. Complete the Execute function
+	- it should only be able to execute if the txId exists and hasn't been executed yet 
+	- check that the count of Approvals that we defined in the helper function is greater than or equal to the required number of approvals.
+	- We need to get the data stored in the Transaction struct as a variable transaction and update it.
+	- set executed to true
+	- execute the transaction using the low level call method 
+	- require that the transaction executed successfully
+	- emit ExecuteTransaction
+```
+function execute(uint _txId) public 
+        onlyOwner 
+        txExists(_txId) 
+        notExecuted(_txId) 
+    { 
+        require(_getApprovalCount(_txId) >= required, "Not enough approvals"); 
+        Transaction storage transaction = transactions[_txId]; 
+     
+        transaction.executed = true; 
+     
+        (bool success, ) = transaction.to.call{value: transaction.value}( 
+            transaction.data 
+        ); 
+         require(success, "txfailed"); 
+        emit Execute(_txId); 
+    }
+```
+9. Complete the revoke function. Let's say that an owner approves a transaction, but before the transaction is executed, he changes his mind and wants to undo the approval.
+	- Add appropriate modifiers
+		- only owner should be able to call this function
+		- transaction at _txIndex must exist
+		- transaction at _txIndex must be executed
+	- Revoke the confirmation
+		- We need to get the data stored in the Transaction struct as a variable transaction and update it.
+		- require that msg.sender has approved the transaction
+		- set approved to false for msg.sender
+		- decrement the number of  confirmations that  the transaction has.
+		- emit RevokeConfirmation
+```
+function revoke(uint _txId) 
+    external 
+    onlyOwner 
+    txExists(_txId) 
+    notExecuted(_txId)
+{
+    
+    Transaction storage transaction = transactions[_txId];
+    require(approved[_txId][msg.sender], "tx not approved");
+    approved[_txId][msg.sender] = false;
+    transaction.numConfirmations -= 1;
+    emit Revoke(msg.sender, _txId);
+}
+```
+
+10. We will also add another function that will give us the amount of ether currently in the contract
+```
+function balance() external view returns (uint){ 
+        uint bal = address(this).balance; 
+        return bal; 
+    }
+    
+```
+
+Testing the Smart Contract in Remix
+
+We will test it with three owner address:
+
+["0x5B38Da6a701c568545dCfcB03FcB875f56beddC4",
+"0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2",
+"0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db"]
+
+And we will try to send a transaction to another contract that is not one of the owners.
+
+0xdD870fA1b7C4700F2BD7f44238821C26f7392148
+
+
+
